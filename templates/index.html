@@ -194,7 +194,10 @@
                                 <i class="bi bi-file-earmark-pdf text-muted display-4"></i>
                                 <h6 class="mt-3">选择或拖拽发票文件(支持批量上传)</h6>
                                 <p class="small text-muted mb-4">支持 PDF 或常见的图片格式</p>
-                                <input type="file" name="invoice" accept=".pdf,image/*" multiple required>
+
+                                <input class="form-control form-control-lg" type="file" id="invoice" name="invoice" accept="image/jpeg, image/png, image/jpg" required>
+
+
                             </div>
                             <button type="submit" class="btn btn-nju w-100 py-3 mt-4 fw-bold shadow-sm">
                                 <i class="bi bi-lightning-charge-fill me-2"></i>开始批量识别并归档
