@@ -26,7 +26,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # 百度 OCR 配置 (🚨 请在这里填入你真实的百度秘钥！)
 APP_ID = '122001991'
 API_KEY = 'aE4bjyOR0B0JWQxhGvtMhTMh'
-SECRET_KEY = 'PCMvnAFiL1gXg2y2Q3q2LYjSFu02fZwU'
+SECRET_KEY = 'PCMvnAFiL1gXg2y2Q3q2LYjSFu02fZwUY'
 ocr_client = AipOcr(APP_ID, API_KEY, SECRET_KEY)
 
 # ==========================================
