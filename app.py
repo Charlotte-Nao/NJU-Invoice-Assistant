@@ -20,7 +20,7 @@ db = SQLAlchemy(app)
 
 # 连接 Supabase Storage 云存储桶
 SUPABASE_URL = "https://qjwfamlhmtriaqvycnbr.supabase.co"
-SUPABASE_KEY = "sb_publishable_7GAGR_O7WftZvdonzdaw_Q_BS1Ngtru"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqd2ZhbWxobXRyaWFxdnljbmJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyNzgwMTEsImV4cCI6MjA4Nzg1NDAxMX0.w1LGDsrFDq_TR3YTLAbY5wkOInJx4YNNHJF4cBAtxgQ"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # 百度 OCR 配置 (🚨 请在这里填入你真实的百度秘钥！)
