@@ -5,6 +5,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from aip import AipOcr
 from supabase import create_client, Client
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 
 
 app = Flask(__name__)
@@ -210,6 +211,71 @@ def preview_attachment(id):
         return redirect(inv.file_url)
     return "云端文件不存在", 404
 
+
+@app.route('/download_all')
+def download_all():
+    import io
+    import zipfile
+    import openpyxl
+    import urllib.request
+    import urllib.parse
+
+    invoices = Invoice.query.all()
+    if not invoices:
+        flash("没有可导出的发票数据！")
+        return redirect(url_for('index'))
+
+    # 在内存中创建一个 ZIP 文件
+    memory_zip = io.BytesIO()
+    with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+        
+        # 1. 创建 Excel 汇总表
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "报销汇总"
+        # 写入表头
+        ws.append(['垫付人', '学号', '银行卡号', '发票代码', '发票号码', '开票日期', '商品名称', '总金额(元)'])
+
+        for inv in invoices:
+            items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
+            good_name = items[0].name if items else '详见明细'
+            
+            # 写入一行 Excel 数据
+            ws.append([inv.payer, inv.stu_id, inv.bank_card, inv.inv_code, inv.seller, inv.date, good_name, inv.total_amount])
+
+            # 2. 从 Supabase 云端拉取图片并塞入 ZIP
+            if inv.file_url:
+                try:
+                    # 获取原图数据
+                    req = urllib.request.Request(inv.file_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    response = urllib.request.urlopen(req)
+                    img_data = response.read()
+                    
+                    # 提取文件名并解码中文
+                    raw_filename = inv.file_url.split('/')[-1]
+                    clean_filename = urllib.parse.unquote(raw_filename)
+                    
+                    # 为了防止图片重名，用“垫付人_发票号”建个专属文件夹
+                    folder_name = f"{inv.payer}_{inv.seller}_{inv.total_amount}"
+                    zf.writestr(f"附件/{folder_name}/{clean_filename}", img_data)
+                except Exception as e:
+                    print(f"图片下载失败: {e}")
+
+        # 3. 把存满数据的 Excel 也塞入 ZIP
+        excel_memory = io.BytesIO()
+        wb.save(excel_memory)
+        excel_memory.seek(0)
+        zf.writestr("发票汇总报表.xlsx", excel_memory.getvalue())
+
+    # 将内存指针移回开头，准备发送给浏览器
+    memory_zip.seek(0)
+    
+    return send_file(
+        memory_zip,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name='南大报销汇总数据_云端导出.zip'
+    )
 
 
 @app.route('/delete/<int:id>', methods=['POST'])
