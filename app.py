@@ -5,7 +5,6 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from aip import AipOcr
 from supabase import create_client, Client
-import base64
 
 
 app = Flask(__name__)
@@ -98,10 +97,27 @@ def upload():
         supabase.storage.from_("invoices").upload(filename, file_bytes, {"content-type": file.content_type})
         file_url = supabase.storage.from_("invoices").get_public_url(filename)
         
-        # 2. 调用百度 API 提取发票数据
-        payload = {'image': base64.b64encode(file_bytes).decode()}
-        res = ocr_client._request('https://aip.baidubce.com/rest/2.0/ocr/v1/vat_invoice', payload)
+# 2. 调用百度 API 提取发票数据 (纯原生 HTTP 请求)
+        import urllib.request
+        import urllib.parse
+        import json
+        import base64
         
+        # 白嫖 SDK 自动管理的鉴权 Token
+        token_info = ocr_client._auth()
+        access_token = token_info.get('access_token', '')
+        
+        # 组装纯正的原生网络请求
+        request_url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/vat_invoice?access_token={access_token}"
+        payload = {'image': base64.b64encode(file_bytes).decode('utf-8')}
+        data = urllib.parse.urlencode(payload).encode('utf-8')
+        
+        req = urllib.request.Request(request_url, data=data)
+        req.add_header('Content-Type', 'application/x-www-form-urlencoded')
+        
+        # 发起强力穿透请求并解析返回数据
+        response = urllib.request.urlopen(req)
+        res = json.loads(response.read().decode('utf-8'))
         if 'words_result' not in res:
             flash(f"发票识别失败：{res.get('error_msg', '未知错误')}")
             return redirect(url_for('index'))
