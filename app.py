@@ -164,6 +164,54 @@ def upload():
         
     return redirect(url_for('index'))
 
+
+@app.route('/get_invoice_detail/<int:id>')
+def get_invoice_detail(id):
+    try:
+        # 1. 从云端数据库查询发票和它的明细
+        inv = Invoice.query.get_or_404(id)
+        items = InvoiceItem.query.filter_by(invoice_id=id).all()
+        
+        # 2. 组装明细数据
+        items_data = []
+        for item in items:
+            items_data.append({
+                'name': item.name,
+                'spec': item.spec,
+                'price': item.price,
+                'quantity': item.quantity,
+                'amount': item.amount
+            })
+            
+        # 3. 组装发票主数据
+        inv_data = {
+            'seller': inv.seller,
+            'date': inv.date,
+            'good_name': items[0].name if items else '详见明细',
+            'spec': items[0].spec if items else '-'
+        }
+        
+        # 4. 组装文件列表 (提取 Supabase 云端链接里的文件名)
+        import urllib.parse
+        raw_filename = inv.file_url.split('/')[-1] if inv.file_url else '发票原件.jpg'
+        clean_filename = urllib.parse.unquote(raw_filename) # 解码中文名
+        
+        files_list = [{'name': clean_filename, 'protected': True}]
+        
+        return {"ok": True, "inv": inv_data, "items": items_data, "files_list": files_list}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.route('/preview_attachment/<int:id>')
+def preview_attachment(id):
+    # 预览文件时，直接重定向到 Supabase 的公网云端图片地址
+    inv = Invoice.query.get_or_404(id)
+    if inv.file_url:
+        return redirect(inv.file_url)
+    return "云端文件不存在", 404
+
+
+
 @app.route('/delete/<int:id>', methods=['POST'])
 def delete_invoice(id):
     inv = Invoice.query.get_or_404(id)
