@@ -337,14 +337,6 @@ def download_all():
     return send_file(memory_zip, mimetype='application/zip', as_attachment=True, download_name='南大报销汇总数据_云端导出.zip')
 
 
-@app.route('/delete/<int:id>', methods=['POST'])
-def delete_invoice(id):
-    inv = Invoice.query.get_or_404(id)
-    # 此处为简化逻辑，暂不调用 Supabase API 删除云端文件，只删数据库记录
-    db.session.delete(inv)
-    db.session.commit()
-    flash("发票记录已删除！")
-    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     # Vercel 不会运行这里，这只是为了让你在本地最后测试一次
