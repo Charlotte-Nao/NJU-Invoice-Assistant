@@ -5,6 +5,8 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from aip import AipOcr
 from supabase import create_client, Client
+import base64
+
 
 app = Flask(__name__)
 app.secret_key = 'nju_invoice_assistant_secret_key'
@@ -97,7 +99,8 @@ def upload():
         file_url = supabase.storage.from_("invoices").get_public_url(filename)
         
         # 2. 调用百度 API 提取发票数据
-        res = ocr_client.vatInvoice(file_bytes)
+        payload = {'image': base64.b64encode(file_bytes).decode()}
+        res = ocr_client._request('https://aip.baidubce.com/rest/2.0/ocr/v1/vat_invoice', payload)
         
         if 'words_result' not in res:
             flash(f"发票识别失败：{res.get('error_msg', '未知错误')}")
