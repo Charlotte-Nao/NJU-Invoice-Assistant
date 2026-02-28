@@ -255,35 +255,43 @@ def download_all():
     memory_zip = io.BytesIO()
     with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
         
-        # 1. 创建 Excel 汇总表
+# 1. 创建 Excel 汇总表
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "报销汇总"
-        # 严格按照甲方的 12 个表头格式
-        ws.append(['垫付人姓名', '学号', '银行卡号', '发票号', '报销内容', '发票类型', '单位', '数量', '发票单价', '附件金额', '合计', '备注'])
+        
+        # 严格按照甲方要求的 13 个表头和顺序
+        ws.append([
+            '发票垫付人', '学号', '南京大学工行卡卡号', '报销商品名称', '规格型号', 
+            '单位', '供应商', '发票号', '发票代码', '数量', '总金额', '单价', '开票日期'
+        ])
 
         for inv in invoices:
             items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
             
-            # 2. 核心修正：按“商品明细”循环，而不是按“整张发票”循环
+            # 按“商品明细”循环：一张发票有2个商品，就会生成2行
             if not items:
-                # 兜底：如果没识别出明细，依然占位输出一行
-                ws.append([inv.payer, inv.stu_id, inv.bank_card, inv.inv_num, '详见原件', '普通发票', '', '', '', '', inv.total_amount, ''])
+                # 兜底：如果没有识别出明细，主信息依然保留输出
+                ws.append([
+                    inv.payer, inv.stu_id, inv.bank_card, '详见原件', '-', 
+                    '-', inv.seller, inv.inv_num, inv.inv_code, '-', inv.total_amount, '-', inv.date
+                ])
             else:
                 for item in items:
                     ws.append([
-                        inv.payer,          # 垫付人姓名
-                        inv.stu_id,         # 学号
-                        inv.bank_card,      # 银行卡号
-                        inv.inv_num,        # 发票号
-                        item.name,          # 报销内容
-                        '普通发票',          # 发票类型 (默认占位)
-                        item.unit,          # 单位
-                        item.quantity,      # 数量
-                        item.price,         # 发票单价 (已转税后)
-                        item.amount,        # 附件金额 (已转税后)
-                        inv.total_amount,   # 合计 (整张发票总额)
-                        ''                  # 备注
+                        inv.payer,          # 1. 发票垫付人
+                        inv.stu_id,         # 2. 学号
+                        inv.bank_card,      # 3. 南京大学工行卡卡号
+                        item.name,          # 4. 报销商品名称
+                        item.spec,          # 5. 规格型号
+                        item.unit,          # 6. 单位
+                        inv.seller,         # 7. 供应商
+                        inv.inv_num,        # 8. 发票号
+                        inv.inv_code,       # 9. 发票代码
+                        item.quantity,      # 10. 数量
+                        item.amount,        # 11. 总金额 (该商品明细的含税金额)
+                        item.price,         # 12. 单价 (该商品明细的含税单价)
+                        inv.date            # 13. 开票日期
                     ])
 
             # 3. 从 Supabase 云端拉取图片并塞入 ZIP (无需修改)
