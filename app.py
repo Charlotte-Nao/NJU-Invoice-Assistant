@@ -14,7 +14,7 @@ app.secret_key = 'nju_invoice_assistant_secret_key'
 # ==========================================
 
 # 连接 Supabase PostgreSQL 云数据库
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:nandajinglin@db.qjwfamlhmtriaqvycnbr.supabase.co:5432/postgres'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres.qjwfamlhmtriaqvycnbr:nandajinglin@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
