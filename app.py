@@ -140,17 +140,43 @@ def upload():
         db.session.add(new_inv)
         db.session.flush() # 获取插入后的主键 ID
         
-        # 解析明细列表
+# 解析明细列表
         if isinstance(words.get('CommodityName'), list):
+            
+            # 增加一个安全转浮点数的小工具函数
+            def parse_float(val_str):
+                try: return float(str(val_str).replace(',', '').replace('¥', '').strip())
+                except: return 0.0
+
             for i in range(len(words['CommodityName'])):
+                # 提前抓取并计算含税金额 (不含税金额 + 税额)
+                raw_amt = words['CommodityAmount'][i].get('word', '0') if 'CommodityAmount' in words and i < len(words['CommodityAmount']) else '0'
+                raw_tax = words['CommodityTax'][i].get('word', '0') if 'CommodityTax' in words and i < len(words['CommodityTax']) else '0'
+                raw_qty = words['CommodityNum'][i].get('word', '0') if 'CommodityNum' in words and i < len(words['CommodityNum']) else '0'
+                
+                f_amt = parse_float(raw_amt)
+                f_tax = parse_float(raw_tax)
+                f_qty = parse_float(raw_qty)
+                
+                tax_incl_amt = f_amt + f_tax
+                
+                # 重新计算真实的含税单价
+                if f_qty > 0:
+                    tax_incl_price = tax_incl_amt / f_qty
+                    price_val = f"{tax_incl_price:.3f}".rstrip('0').rstrip('.') if '.' in f"{tax_incl_price:.3f}" else f"{tax_incl_price}"
+                else:
+                    price_val = words['CommodityPrice'][i].get('word', '') if 'CommodityPrice' in words and i < len(words['CommodityPrice']) else ''
+                    
+                amt_val = f"{tax_incl_amt:.2f}" if tax_incl_amt > 0 else raw_amt
+
                 item = InvoiceItem(
                     invoice_id=new_inv.id,
                     name=words['CommodityName'][i].get('word', '') if i < len(words['CommodityName']) else '',
                     spec=words['CommodityType'][i].get('word', '') if 'CommodityType' in words and i < len(words['CommodityType']) else '',
                     unit=words['CommodityUnit'][i].get('word', '') if 'CommodityUnit' in words and i < len(words['CommodityUnit']) else '',
-                    quantity=words['CommodityNum'][i].get('word', '') if 'CommodityNum' in words and i < len(words['CommodityNum']) else '',
-                    price=words['CommodityPrice'][i].get('word', '') if 'CommodityPrice' in words and i < len(words['CommodityPrice']) else '',
-                    amount=words['CommodityAmount'][i].get('word', '') if 'CommodityAmount' in words and i < len(words['CommodityAmount']) else '',
+                    quantity=raw_qty if raw_qty != '0' else '',
+                    price=price_val,   # 存入真实的含税单价
+                    amount=amt_val,    # 存入真实的含税金额
                     tax_rate=words['CommodityTaxRate'][i].get('word', '') if 'CommodityTaxRate' in words and i < len(words['CommodityTaxRate']) else '',
                     tax=words['CommodityTax'][i].get('word', '') if 'CommodityTax' in words and i < len(words['CommodityTax']) else ''
                 )
@@ -233,35 +259,49 @@ def download_all():
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "报销汇总"
-        # 写入表头
-        ws.append(['垫付人', '学号', '银行卡号', '发票代码', '发票号码', '开票日期', '商品名称', '总金额(元)'])
+        # 严格按照甲方的 12 个表头格式
+        ws.append(['垫付人姓名', '学号', '银行卡号', '发票号', '报销内容', '发票类型', '单位', '数量', '发票单价', '附件金额', '合计', '备注'])
 
         for inv in invoices:
             items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
-            good_name = items[0].name if items else '详见明细'
             
-            # 写入一行 Excel 数据
-            ws.append([inv.payer, inv.stu_id, inv.bank_card, inv.inv_code, inv.seller, inv.date, good_name, inv.total_amount])
+            # 2. 核心修正：按“商品明细”循环，而不是按“整张发票”循环
+            if not items:
+                # 兜底：如果没识别出明细，依然占位输出一行
+                ws.append([inv.payer, inv.stu_id, inv.bank_card, inv.inv_num, '详见原件', '普通发票', '', '', '', '', inv.total_amount, ''])
+            else:
+                for item in items:
+                    ws.append([
+                        inv.payer,          # 垫付人姓名
+                        inv.stu_id,         # 学号
+                        inv.bank_card,      # 银行卡号
+                        inv.inv_num,        # 发票号
+                        item.name,          # 报销内容
+                        '普通发票',          # 发票类型 (默认占位)
+                        item.unit,          # 单位
+                        item.quantity,      # 数量
+                        item.price,         # 发票单价 (已转税后)
+                        item.amount,        # 附件金额 (已转税后)
+                        inv.total_amount,   # 合计 (整张发票总额)
+                        ''                  # 备注
+                    ])
 
-            # 2. 从 Supabase 云端拉取图片并塞入 ZIP
+            # 3. 从 Supabase 云端拉取图片并塞入 ZIP (无需修改)
             if inv.file_url:
                 try:
-                    # 获取原图数据
                     req = urllib.request.Request(inv.file_url, headers={'User-Agent': 'Mozilla/5.0'})
                     response = urllib.request.urlopen(req)
                     img_data = response.read()
                     
-                    # 提取文件名并解码中文
                     raw_filename = inv.file_url.split('/')[-1]
                     clean_filename = urllib.parse.unquote(raw_filename)
                     
-                    # 为了防止图片重名，用“垫付人_发票号”建个专属文件夹
                     folder_name = f"{inv.payer}_{inv.seller}_{inv.total_amount}"
                     zf.writestr(f"附件/{folder_name}/{clean_filename}", img_data)
                 except Exception as e:
                     print(f"图片下载失败: {e}")
 
-        # 3. 把存满数据的 Excel 也塞入 ZIP
+        # 4. 把存满数据的 Excel 也塞入 ZIP
         excel_memory = io.BytesIO()
         wb.save(excel_memory)
         excel_memory.seek(0)
