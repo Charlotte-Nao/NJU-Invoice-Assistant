@@ -60,6 +60,13 @@ class InvoiceItem(db.Model):
     tax_rate = db.Column(db.String(50))
     tax = db.Column(db.String(50))
 
+# ======== 在这里插入新的附件表 ========
+class Attachment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'))
+    filename = db.Column(db.String(255))
+    file_url = db.Column(db.String(500))
+
 # 自动在云端创建数据表
 with app.app_context():
     db.create_all()
@@ -195,135 +202,139 @@ def upload():
 @app.route('/get_invoice_detail/<int:id>')
 def get_invoice_detail(id):
     try:
-        # 1. 从云端数据库查询发票和它的明细
         inv = Invoice.query.get_or_404(id)
         items = InvoiceItem.query.filter_by(invoice_id=id).all()
+        atts = Attachment.query.filter_by(invoice_id=id).all() # 查询该发票的所有补充截图
         
-        # 2. 组装明细数据
-        items_data = []
-        for item in items:
-            items_data.append({
-                'name': item.name,
-                'spec': item.spec,
-                'price': item.price,
-                'quantity': item.quantity,
-                'amount': item.amount
-            })
+        items_data = [{'name': item.name, 'spec': item.spec, 'price': item.price, 'quantity': item.quantity, 'amount': item.amount} for item in items]
+        inv_data = {'seller': inv.seller, 'date': inv.date, 'good_name': items[0].name if items else '详见明细', 'spec': items[0].spec if items else '-'}
+        
+        # 组装文件列表 (发票原件 + 补充截图)
+        files_list = [{'name': '发票原件.jpg', 'protected': True}]
+        for att in atts:
+            files_list.append({'name': att.filename, 'protected': False})
             
-        # 3. 组装发票主数据
-        inv_data = {
-            'seller': inv.seller,
-            'date': inv.date,
-            'good_name': items[0].name if items else '详见明细',
-            'spec': items[0].spec if items else '-'
-        }
+        # 检查是否同时拥有订单和支付截图
+        has_order = any('订单' in a.filename for a in atts)
+        has_pay = any('支付' in a.filename for a in atts)
         
-        # 4. 组装文件列表 (提取 Supabase 云端链接里的文件名)
-        import urllib.parse
-        raw_filename = inv.file_url.split('/')[-1] if inv.file_url else '发票原件.jpg'
-        clean_filename = urllib.parse.unquote(raw_filename) # 解码中文名
-        
-        files_list = [{'name': clean_filename, 'protected': True}]
-        
-        return {"ok": True, "inv": inv_data, "items": items_data, "files_list": files_list}
+        return {"ok": True, "inv": inv_data, "items": items_data, "files_list": files_list, "has_order": has_order, "has_pay": has_pay}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 @app.route('/preview_attachment/<int:id>')
 def preview_attachment(id):
-    # 预览文件时，直接重定向到 Supabase 的公网云端图片地址
+    filename = request.args.get('filename')
     inv = Invoice.query.get_or_404(id)
+    # 如果预览的是补充截图
+    if filename and filename != '发票原件.jpg':
+        att = Attachment.query.filter_by(invoice_id=id, filename=filename).first()
+        if att and att.file_url:
+            return redirect(att.file_url)
+    # 否则预览发票原件
     if inv.file_url:
         return redirect(inv.file_url)
     return "云端文件不存在", 404
 
+@app.route('/upload_extra/<int:id>', methods=['POST'])
+def upload_extra(id):
+    files = request.files.getlist('extra_files')
+    for file in files:
+        if file.filename:
+            raw_filename = file.filename # 前端传来的如"订单截图_1.jpg"
+            safe_name = f"extra_{id}_{int(time.time())}_{secure_filename(raw_filename)}"
+            supabase.storage.from_("invoices").upload(safe_name, file.read(), {"content-type": file.content_type})
+            file_url = supabase.storage.from_("invoices").get_public_url(safe_name)
+            
+            att = Attachment(invoice_id=id, filename=raw_filename, file_url=file_url)
+            db.session.add(att)
+    db.session.commit()
+    return get_invoice_detail(id) # 返回刷新后的数据给前端
+
+@app.route('/delete_attachment/<int:id>', methods=['POST'])
+def delete_attachment(id):
+    filename = request.form.get('filename')
+    att = Attachment.query.filter_by(invoice_id=id, filename=filename).first()
+    if att:
+        db.session.delete(att)
+        db.session.commit()
+        return {"ok": True}
+    return {"ok": False}
+
+@app.route('/clear_all', methods=['POST'])
+def clear_all():
+    try:
+        # 清空数据库里的所有表数据
+        db.session.query(InvoiceItem).delete()
+        db.session.query(Attachment).delete()
+        db.session.query(Invoice).delete()
+        db.session.commit()
+        flash("🎉 所有发票记录和附件信息已成功清空！")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"清空失败: {str(e)}")
+    return redirect(url_for('index'))
+
+@app.route('/delete/<int:id>', methods=['GET'])
+def delete_invoice(id):
+    inv = Invoice.query.get_or_404(id)
+    db.session.delete(inv)
+    db.session.commit()
+    return {"ok": True}
 
 @app.route('/download_all')
 def download_all():
-    import io
-    import zipfile
-    import openpyxl
-    import urllib.request
-    import urllib.parse
+    import io, zipfile, openpyxl, urllib.request
 
     invoices = Invoice.query.all()
     if not invoices:
         flash("没有可导出的发票数据！")
         return redirect(url_for('index'))
 
-    # 在内存中创建一个 ZIP 文件
     memory_zip = io.BytesIO()
     with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-        
-# 1. 创建 Excel 汇总表
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "报销汇总"
-        
-        # 严格按照甲方要求的 13 个表头和顺序
-        ws.append([
-            '发票垫付人', '学号', '南京大学工行卡卡号', '报销商品名称', '规格型号', 
-            '单位', '供应商', '发票号', '发票代码', '数量', '总金额', '单价', '开票日期'
-        ])
+        ws.append(['发票垫付人', '学号', '南京大学工行卡卡号', '报销商品名称', '规格型号', '单位', '供应商', '发票号', '发票代码', '数量', '总金额', '单价', '开票日期'])
 
         for inv in invoices:
             items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
-            
-            # 按“商品明细”循环：一张发票有2个商品，就会生成2行
             if not items:
-                # 兜底：如果没有识别出明细，主信息依然保留输出
-                ws.append([
-                    inv.payer, inv.stu_id, inv.bank_card, '详见原件', '-', 
-                    '-', inv.seller, inv.inv_num, inv.inv_code, '-', inv.total_amount, '-', inv.date
-                ])
+                ws.append([inv.payer, inv.stu_id, inv.bank_card, '详见原件', '-', '-', inv.seller, inv.inv_num, inv.inv_code, '-', inv.total_amount, '-', inv.date])
             else:
                 for item in items:
-                    ws.append([
-                        inv.payer,          # 1. 发票垫付人
-                        inv.stu_id,         # 2. 学号
-                        inv.bank_card,      # 3. 南京大学工行卡卡号
-                        item.name,          # 4. 报销商品名称
-                        item.spec,          # 5. 规格型号
-                        item.unit,          # 6. 单位
-                        inv.seller,         # 7. 供应商
-                        inv.inv_num,        # 8. 发票号
-                        inv.inv_code,       # 9. 发票代码
-                        item.quantity,      # 10. 数量
-                        item.amount,        # 11. 总金额 (该商品明细的含税金额)
-                        item.price,         # 12. 单价 (该商品明细的含税单价)
-                        inv.date            # 13. 开票日期
-                    ])
+                    ws.append([inv.payer, inv.stu_id, inv.bank_card, item.name, item.spec, item.unit, inv.seller, inv.inv_num, inv.inv_code, item.quantity, item.amount, item.price, inv.date])
 
-            # 3. 从 Supabase 云端拉取图片并塞入 ZIP (无需修改)
+            # ==== 核心：生成独立文件夹与 TXT 信息 ====
+            safe_date = inv.date.replace('/', '-').replace('\\', '-') if inv.date else '未知日期'
+            folder_name = f"{inv.payer}_{safe_date}"
+            
+            txt_content = f"姓名: {inv.payer}\n学号: {inv.stu_id}\n银行卡号: {inv.bank_card}\n"
+            zf.writestr(f"{folder_name}/垫付人信息.txt", txt_content.encode('utf-8'))
+            
+            # 下载发票原件
             if inv.file_url:
                 try:
-                    req = urllib.request.Request(inv.file_url, headers={'User-Agent': 'Mozilla/5.0'})
-                    response = urllib.request.urlopen(req)
-                    img_data = response.read()
-                    
-                    raw_filename = inv.file_url.split('/')[-1]
-                    clean_filename = urllib.parse.unquote(raw_filename)
-                    
-                    folder_name = f"{inv.payer}_{inv.seller}_{inv.total_amount}"
-                    zf.writestr(f"附件/{folder_name}/{clean_filename}", img_data)
-                except Exception as e:
-                    print(f"图片下载失败: {e}")
+                    img_data = urllib.request.urlopen(urllib.request.Request(inv.file_url, headers={'User-Agent': 'Mozilla/5.0'})).read()
+                    zf.writestr(f"{folder_name}/发票原件.jpg", img_data)
+                except: pass
+                
+            # 下载补充截图 (订单截图_1, 支付截图_1 等)
+            atts = Attachment.query.filter_by(invoice_id=inv.id).all()
+            for att in atts:
+                if att.file_url:
+                    try:
+                        img_data = urllib.request.urlopen(urllib.request.Request(att.file_url, headers={'User-Agent': 'Mozilla/5.0'})).read()
+                        zf.writestr(f"{folder_name}/{att.filename}", img_data)
+                    except: pass
 
-        # 4. 把存满数据的 Excel 也塞入 ZIP
         excel_memory = io.BytesIO()
         wb.save(excel_memory)
-        excel_memory.seek(0)
         zf.writestr("发票汇总报表.xlsx", excel_memory.getvalue())
 
-    # 将内存指针移回开头，准备发送给浏览器
     memory_zip.seek(0)
-    
-    return send_file(
-        memory_zip,
-        mimetype='application/zip',
-        as_attachment=True,
-        download_name='南大报销汇总数据_云端导出.zip'
-    )
+    return send_file(memory_zip, mimetype='application/zip', as_attachment=True, download_name='南大报销汇总数据_云端导出.zip')
 
 
 @app.route('/delete/<int:id>', methods=['POST'])

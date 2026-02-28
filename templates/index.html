@@ -215,6 +215,13 @@
                         <i class="bi bi-file-zip-fill me-1"></i>导出报销附件压缩包 (ZIP)
                     </a>
 
+                    <form action="{{ url_for('clear_all') }}" method="post" class="d-inline ms-2" 
+                        onsubmit="return confirm('⚠️ 警告：这将永久删除云端数据库中所有的发票和明细记录！确认继续吗？');">
+                        <button type="submit" class="btn btn-outline-danger btn-sm shadow-sm">
+                            <i class="bi bi-trash-fill me-1"></i>一键清空记录
+                        </button>
+                    </form>
+                    
                     </div>
             </div>
 
@@ -234,7 +241,7 @@
                         <strong class="ms-2 text-dark">{{ inv.seller }}</strong>
                     </div>
                     <div class="d-flex align-items-center">
-                        <span class="me-3 fw-bold text-primary">¥{{ inv.total }}</span>
+                        <span class="me-3 fw-bold text-primary">¥{{ inv.total_amount }}</span>
                         <button class="btn btn-sm btn-outline-secondary rounded-pill px-3 me-2 load-detail-btn" data-inv="{{ inv.id }}" data-bs-toggle="collapse" data-bs-target="#inv-{{ inv.id }}">详情</button>
                         <a href="/delete/{{ inv.id }}" class="btn btn-sm btn-light text-danger rounded-circle delete-invoice" data-inv="{{ inv.id }}" title="删除发票（清理本地文件夹）">
                             <i class="bi bi-trash3"></i>
