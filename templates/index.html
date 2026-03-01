@@ -56,18 +56,24 @@
             <div class="card p-4">
                 <form action="/upload" method="post" enctype="multipart/form-data" id="uploadForm">
                     <div class="row g-3">
-                        <div class="col-md-4">
+
+                         <div class="col-md-3">
                             <label class="form-label small fw-bold">垫付人姓名</label>
                             <input type="text" name="payer" id="payer" class="form-control" placeholder="如：张三" required>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <label class="form-label small fw-bold">学号</label>
                             <input type="text" name="stu_id" id="stu_id" class="form-control" placeholder="如：DG21xxxxx" required>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <label class="form-label small fw-bold">南大工行卡号</label>
                             <input type="text" name="bank_card" id="bank_card" class="form-control" placeholder="19位工行卡号" required>
                         </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-bold text-primary">仓库密钥 (选填)</label>
+                            <input type="text" name="warehouse_key" id="warehouse_key" class="form-control border-primary bg-primary bg-opacity-10" placeholder="默认: main">
+                        </div>
+
 
                         <div class="col-12 mt-4">
                             <div class="p-3 bg-light rounded-3">
@@ -107,23 +113,33 @@
         </div>
 
         <div class="tab-pane fade" id="tab-list" role="tabpanel">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <h5 class="fw-bold mb-0">归档记录</h5>
-                <div class="d-flex gap-2"> 
-                    
-                    <a href="{{ url_for('download_all') }}" class="btn btn-success btn-sm shadow-sm">
-                        <i class="bi bi-file-zip-fill me-1"></i>导出报销附件压缩包 (ZIP)
+
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-3">
+                <div class="d-flex align-items-center gap-2">
+                    <h5 class="fw-bold mb-0">归档记录</h5>
+                    <span class="badge bg-primary rounded-pill px-3 shadow-sm">当前仓库: {{ current_key }}</span>
+                </div>
+                
+                <div class="d-flex gap-2 align-items-center flex-wrap"> 
+                    <form action="/" method="get" class="d-flex align-items-center m-0">
+                        <input type="text" name="key" class="form-control form-control-sm me-2" style="width: 130px;" placeholder="输入密钥切换" value="{{ current_key }}">
+                        <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap">进入仓库</button>
+                    </form>
+
+                    <a href="{{ url_for('download_all', key=current_key) }}" class="btn btn-success btn-sm shadow-sm text-nowrap">
+                        <i class="bi bi-file-zip-fill me-1"></i>导出 (ZIP)
                     </a>
 
-                    <form action="{{ url_for('clear_all') }}" method="post" class="d-inline ms-2" 
-                        onsubmit="return confirm('⚠️ 警告：这将永久删除云端数据库中所有的发票和明细记录！确认继续吗？');">
-                        <button type="submit" class="btn btn-outline-danger btn-sm shadow-sm">
-                            <i class="bi bi-trash-fill me-1"></i>一键清空记录
+                    <form action="{{ url_for('clear_all') }}" method="post" class="m-0" 
+                        onsubmit="return confirm('⚠️ 警告：这将永久删除【{{ current_key }}】仓库中所有的记录！确认继续吗？');">
+                        <input type="hidden" name="key" value="{{ current_key }}">
+                        <button type="submit" class="btn btn-outline-danger btn-sm shadow-sm text-nowrap">
+                            <i class="bi bi-trash-fill me-1"></i>清空当前仓库
                         </button>
                     </form>
-                    
-                    </div>
+                </div>
             </div>
+
 
             {% for inv in invoices %}
             <div class="card mb-3" data-inv="{{ inv.id }}">

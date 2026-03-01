@@ -45,8 +45,13 @@ class Invoice(db.Model):
     inv_code = db.Column(db.String(50))
     date = db.Column(db.String(50))
     total_amount = db.Column(db.String(50))
+
+    warehouse_key = db.Column(db.String(50), default='main') # 新增：仓库密钥
+    
     file_url = db.Column(db.String(500))  # 存放云端图片的公网 URL
     items = db.relationship('InvoiceItem', backref='invoice', lazy=True, cascade="all, delete-orphan")
+
+    
 
 class InvoiceItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -77,31 +82,35 @@ with app.app_context():
 
 @app.route('/')
 def index():
-    invoices = Invoice.query.order_by(Invoice.id.desc()).all()
+    # 获取当前请求的密钥，没填就默认为 main
+    current_key = request.args.get('key', 'main').strip() or 'main'
     
-    # ===== 核心修复：每次打开网页时，实时去数据库盘点每张发票的附件 =====
+    # 核心：只查当前密钥下的发票
+    invoices = Invoice.query.filter_by(warehouse_key=current_key).order_by(Invoice.id.desc()).all()
+    
     for inv in invoices:
         atts = Attachment.query.filter_by(invoice_id=inv.id).all()
         inv.has_order = any('订单' in a.filename for a in atts)
         inv.has_pay = any('支付' in a.filename for a in atts)
-    # ===================================================================
-    
-    return render_template('index.html', invoices=invoices)
+        
+    return render_template('index.html', invoices=invoices, current_key=current_key)
 
 @app.route('/upload', methods=['POST'])
 def upload():
     payer = request.form.get('payer', '')
     stu_id = request.form.get('stu_id', '')
     bank_card = request.form.get('bank_card', '')
+    # ==== 新增：获取前端传来的仓库密钥 ====
+    warehouse_key = request.form.get('warehouse_key', '').strip() or 'main'
     
     if 'invoice' not in request.files:
         flash("没有检测到文件上传！")
-        return redirect(url_for('index'))
+        return redirect(url_for('index', key=warehouse_key))
         
     file = request.files['invoice']
     if file.filename == '':
         flash("文件名不能为空！")
-        return redirect(url_for('index'))
+        return redirect(url_for('index', key=warehouse_key))
 
     # 读取图片字节数据
     file_bytes = file.read()
@@ -109,44 +118,33 @@ def upload():
     try:
         # 1. 上传图片到 Supabase Storage
         filename = f"{int(time.time())}_{secure_filename(file.filename)}"
-        # content-type 确保浏览器能直接预览图片而不是下载
         supabase.storage.from_("invoices").upload(filename, file_bytes, {"content-type": file.content_type})
         file_url = supabase.storage.from_("invoices").get_public_url(filename)
         
-# 2. 调用百度 API 提取发票数据 (纯原生 HTTP 请求)
+        # 2. 调用百度 API 提取发票数据
         import urllib.request
         import urllib.parse
         import json
         import base64
         
-        # 白嫖 SDK 自动管理的鉴权 Token
         token_info = ocr_client._auth()
         access_token = token_info.get('access_token', '')
-        
-        # 组装纯正的原生网络请求
         request_url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/vat_invoice?access_token={access_token}"
         
-# ================= 核心修改：智能识别图片或 PDF =================
         if file.filename.lower().endswith('.pdf') or file.content_type == 'application/pdf':
-            # 如果是 PDF，使用百度专属的 pdf_file 参数
             payload = {'pdf_file': base64.b64encode(file_bytes).decode('utf-8')}
         else:
-            # 如果是普通图片，保持使用 image 参数
             payload = {'image': base64.b64encode(file_bytes).decode('utf-8')}
-        # ===============================================================
-
 
         data = urllib.parse.urlencode(payload).encode('utf-8')
-        
         req = urllib.request.Request(request_url, data=data)
         req.add_header('Content-Type', 'application/x-www-form-urlencoded')
         
-        # 发起强力穿透请求并解析返回数据
         response = urllib.request.urlopen(req)
         res = json.loads(response.read().decode('utf-8'))
         if 'words_result' not in res:
             flash(f"发票识别失败：{res.get('error_msg', '未知错误')}")
-            return redirect(url_for('index'))
+            return redirect(url_for('index', key=warehouse_key))
             
         words = res['words_result']
         
@@ -160,21 +158,19 @@ def upload():
             inv_code=words.get('InvoiceCode', ''),
             date=words.get('InvoiceDate', ''),
             total_amount=words.get('AmountInFiguers', ''),
-            file_url=file_url # 保存云端链接
+            file_url=file_url,
+            warehouse_key=warehouse_key  # ==== 新增：保存到对应密钥的仓库 ====
         )
         db.session.add(new_inv)
-        db.session.flush() # 获取插入后的主键 ID
+        db.session.flush() 
         
-# 解析明细列表
+        # 解析明细列表
         if isinstance(words.get('CommodityName'), list):
-            
-            # 增加一个安全转浮点数的小工具函数
             def parse_float(val_str):
                 try: return float(str(val_str).replace(',', '').replace('¥', '').strip())
                 except: return 0.0
 
             for i in range(len(words['CommodityName'])):
-                # 提前抓取并计算含税金额 (不含税金额 + 税额)
                 raw_amt = words['CommodityAmount'][i].get('word', '0') if 'CommodityAmount' in words and i < len(words['CommodityAmount']) else '0'
                 raw_tax = words['CommodityTax'][i].get('word', '0') if 'CommodityTax' in words and i < len(words['CommodityTax']) else '0'
                 raw_qty = words['CommodityNum'][i].get('word', '0') if 'CommodityNum' in words and i < len(words['CommodityNum']) else '0'
@@ -182,10 +178,8 @@ def upload():
                 f_amt = parse_float(raw_amt)
                 f_tax = parse_float(raw_tax)
                 f_qty = parse_float(raw_qty)
-                
                 tax_incl_amt = f_amt + f_tax
                 
-                # 重新计算真实的含税单价
                 if f_qty > 0:
                     tax_incl_price = tax_incl_amt / f_qty
                     price_val = f"{tax_incl_price:.3f}".rstrip('0').rstrip('.') if '.' in f"{tax_incl_price:.3f}" else f"{tax_incl_price}"
@@ -200,8 +194,8 @@ def upload():
                     spec=words['CommodityType'][i].get('word', '') if 'CommodityType' in words and i < len(words['CommodityType']) else '',
                     unit=words['CommodityUnit'][i].get('word', '') if 'CommodityUnit' in words and i < len(words['CommodityUnit']) else '',
                     quantity=raw_qty if raw_qty != '0' else '',
-                    price=price_val,   # 存入真实的含税单价
-                    amount=amt_val,    # 存入真实的含税金额
+                    price=price_val,
+                    amount=amt_val,
                     tax_rate=words['CommodityTaxRate'][i].get('word', '') if 'CommodityTaxRate' in words and i < len(words['CommodityTaxRate']) else '',
                     tax=words['CommodityTax'][i].get('word', '') if 'CommodityTax' in words and i < len(words['CommodityTax']) else ''
                 )
@@ -214,7 +208,8 @@ def upload():
         db.session.rollback()
         flash(f"处理过程中发生错误: {str(e)}")
         
-    return redirect(url_for('index'))
+    # ==== 核心修改：上传完跳回对应的仓库 ====
+    return redirect(url_for('index', key=warehouse_key))
 
 
 @app.route('/get_invoice_detail/<int:id>')
@@ -281,33 +276,34 @@ def delete_attachment(id):
 
 @app.route('/clear_all', methods=['POST'])
 def clear_all():
+    # ==== 获取当前操作的仓库密钥 ====
+    current_key = request.form.get('key', 'main')
     try:
-        # 清空数据库里的所有表数据
-        db.session.query(InvoiceItem).delete()
-        db.session.query(Attachment).delete()
-        db.session.query(Invoice).delete()
-        db.session.commit()
-        flash("🎉 所有发票记录和附件信息已成功清空！")
+        # 只找出当前仓库的发票并删除
+        invs = Invoice.query.filter_by(warehouse_key=current_key).all()
+        if invs:
+            inv_ids = [inv.id for inv in invs]
+            db.session.query(InvoiceItem).filter(InvoiceItem.invoice_id.in_(inv_ids)).delete(synchronize_session=False)
+            db.session.query(Attachment).filter(Attachment.invoice_id.in_(inv_ids)).delete(synchronize_session=False)
+            db.session.query(Invoice).filter(Invoice.id.in_(inv_ids)).delete(synchronize_session=False)
+            db.session.commit()
+        flash(f"🎉 仓库【{current_key}】的所有记录已成功清空！")
     except Exception as e:
         db.session.rollback()
         flash(f"清空失败: {str(e)}")
-    return redirect(url_for('index'))
-
-@app.route('/delete/<int:id>', methods=['GET'])
-def delete_invoice(id):
-    inv = Invoice.query.get_or_404(id)
-    db.session.delete(inv)
-    db.session.commit()
-    return {"ok": True}
+    return redirect(url_for('index', key=current_key))
 
 @app.route('/download_all')
 def download_all():
     import io, zipfile, openpyxl, urllib.request, os
 
-    invoices = Invoice.query.all()
+    # ==== 获取当前操作的仓库密钥 ====
+    current_key = request.args.get('key', 'main')
+    invoices = Invoice.query.filter_by(warehouse_key=current_key).all()
+    
     if not invoices:
-        flash("没有可导出的发票数据！")
-        return redirect(url_for('index'))
+        flash(f"仓库【{current_key}】没有可导出的数据！")
+        return redirect(url_for('index', key=current_key))
 
     memory_zip = io.BytesIO()
     with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -324,28 +320,24 @@ def download_all():
                 for item in items:
                     ws.append([inv.payer, inv.stu_id, inv.bank_card, item.name, item.spec, item.unit, inv.seller, inv.inv_num, inv.inv_code, item.quantity, item.amount, item.price, inv.date])
 
-            # ==== 核心修复 1：生成完全独立的文件夹名，加上 ID 保证绝对不重名 ====
             safe_date = inv.date.replace('/', '-').replace('\\', '-') if inv.date else '未知日期'
-            # 加上 inv.id 保证绝对不重名 (例如：沐小落_2026-01-05_记录1)
             folder_name = f"{inv.payer}_{safe_date}_记录{inv.id}"
             
             txt_content = f"姓名: {inv.payer}\n学号: {inv.stu_id}\n银行卡号: {inv.bank_card}\n"
             zf.writestr(f"{folder_name}/垫付人信息.txt", txt_content.encode('utf-8'))
             
-            # ==== 核心修复 2：动态获取真实的后缀名 (.pdf/.jpg/.png) ====
             if inv.file_url:
                 try:
                     import urllib.parse
                     raw_url_name = urllib.parse.unquote(inv.file_url.split('/')[-1])
                     ext = os.path.splitext(raw_url_name)[1]
-                    if not ext: ext = '.jpg' # 兜底后缀
+                    if not ext: ext = '.jpg'
                     
                     img_data = urllib.request.urlopen(urllib.request.Request(inv.file_url, headers={'User-Agent': 'Mozilla/5.0'})).read()
                     zf.writestr(f"{folder_name}/发票原件{ext}", img_data)
                 except Exception as e:
                     print(f"原件下载失败: {e}")
                     
-            # 下载补充截图 (订单截图、支付截图等)
             atts = Attachment.query.filter_by(invoice_id=inv.id).all()
             for att in atts:
                 if att.file_url:
@@ -360,8 +352,8 @@ def download_all():
         zf.writestr("发票汇总报表.xlsx", excel_memory.getvalue())
 
     memory_zip.seek(0)
-    return send_file(memory_zip, mimetype='application/zip', as_attachment=True, download_name='南大报销汇总数据_云端导出.zip')
-
+    # ==== 修改导出的文件名，带上当前的仓库密钥 ====
+    return send_file(memory_zip, mimetype='application/zip', as_attachment=True, download_name=f'南大报销_{current_key}仓库.zip')
 if __name__ == '__main__':
     # Vercel 不会运行这里，这只是为了让你在本地最后测试一次
     app.run(debug=True, port=5000)

@@ -1,7 +1,7 @@
 // static/main.js
 
 // 1. 自动记忆功能
-const inputIds = ['payer', 'stu_id', 'bank_card'];
+const inputIds = ['payer', 'stu_id', 'bank_card', 'warehouse_key'];
 
 document.addEventListener('DOMContentLoaded', () => {
     // 恢复数据
