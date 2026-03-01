@@ -751,7 +751,7 @@
         });
     }
 
-    // 上传表单提交处理器
+// 上传表单提交处理器
     async function uploadFormHandler(e) {
         e.preventDefault();
         const form = e.target;
@@ -772,12 +772,19 @@
             return;
         }
         
+        // ================= 核心修复：锁定按钮并显示 Loading 动画 =================
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const originalBtnHtml = submitBtn.innerHTML; // 保存原本的按钮文字和图标
+        submitBtn.disabled = true; // 禁用按钮，防止多次点击
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>上传中...';
+        // ========================================================================
+
         // 计算已有截图的最大序号，确保新上传文件序号连续
         const filesContainer = document.getElementById(`files-container-${invId}`);
         let startIndex = 1;
         if (filesContainer) {
             const existing = Array.from(filesContainer.querySelectorAll('.file-name-text')).map(el => (el.textContent || el.innerText || '').trim());
-            // 匹配 "订单截图_数字" 或 "支付截图_数字"，即使后面有扩展名也能匹配
+            // 匹配 "订单截图_数字" 或 "支付截图_数字"
             const re = new RegExp(uploadType + '截图_(\\d+)');
             let max = 0;
             existing.forEach(name => {
@@ -790,7 +797,7 @@
             startIndex = max + 1;
         }
 
-        // 创建新的 FormData，自动命名文件（处理无扩展名情况）
+        // 创建新的 FormData，自动命名文件
         const formData = new FormData();
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
@@ -809,7 +816,8 @@
             const result = await response.json();
             
             if (result.ok) {
-                alert(`成功上传 ${result.success_count} 个${uploadType}截图`);
+                // 让提示更温和一点，使用小弹窗而不是阻塞式的 alert（如果你想用 alert 也可以保留）
+                // alert(`成功上传 ${result.success_count} 个${uploadType}截图`);
                 
                 const filesContainer = document.getElementById(`files-container-${invId}`);
                 if (filesContainer && result.files_list) {
@@ -858,6 +866,11 @@
             }
         } catch (error) {
             alert(`上传出错: ${error.message}`);
+        } finally {
+            // ================= 核心修复：无论成功还是失败，最后都要解除按钮锁定 =================
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalBtnHtml;
+            // =================================================================================
         }
     }
 
