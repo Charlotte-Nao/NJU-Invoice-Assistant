@@ -284,7 +284,7 @@ def delete_invoice(id):
 
 @app.route('/download_all')
 def download_all():
-    import io, zipfile, openpyxl, urllib.request
+    import io, zipfile, openpyxl, urllib.request, os
 
     invoices = Invoice.query.all()
     if not invoices:
@@ -306,28 +306,36 @@ def download_all():
                 for item in items:
                     ws.append([inv.payer, inv.stu_id, inv.bank_card, item.name, item.spec, item.unit, inv.seller, inv.inv_num, inv.inv_code, item.quantity, item.amount, item.price, inv.date])
 
-            # ==== 核心：生成独立文件夹与 TXT 信息 ====
+            # ==== 核心修复 1：生成完全独立的文件夹名，加上 ID 保证绝对不重名 ====
             safe_date = inv.date.replace('/', '-').replace('\\', '-') if inv.date else '未知日期'
-            folder_name = f"{inv.payer}_{safe_date}"
+            # 加上 inv.id 保证绝对不重名 (例如：沐小落_2026-01-05_记录1)
+            folder_name = f"{inv.payer}_{safe_date}_记录{inv.id}"
             
             txt_content = f"姓名: {inv.payer}\n学号: {inv.stu_id}\n银行卡号: {inv.bank_card}\n"
             zf.writestr(f"{folder_name}/垫付人信息.txt", txt_content.encode('utf-8'))
             
-            # 下载发票原件
+            # ==== 核心修复 2：动态获取真实的后缀名 (.pdf/.jpg/.png) ====
             if inv.file_url:
                 try:
+                    import urllib.parse
+                    raw_url_name = urllib.parse.unquote(inv.file_url.split('/')[-1])
+                    ext = os.path.splitext(raw_url_name)[1]
+                    if not ext: ext = '.jpg' # 兜底后缀
+                    
                     img_data = urllib.request.urlopen(urllib.request.Request(inv.file_url, headers={'User-Agent': 'Mozilla/5.0'})).read()
-                    zf.writestr(f"{folder_name}/发票原件.jpg", img_data)
-                except: pass
-                
-            # 下载补充截图 (订单截图_1, 支付截图_1 等)
+                    zf.writestr(f"{folder_name}/发票原件{ext}", img_data)
+                except Exception as e:
+                    print(f"原件下载失败: {e}")
+                    
+            # 下载补充截图 (订单截图、支付截图等)
             atts = Attachment.query.filter_by(invoice_id=inv.id).all()
             for att in atts:
                 if att.file_url:
                     try:
                         img_data = urllib.request.urlopen(urllib.request.Request(att.file_url, headers={'User-Agent': 'Mozilla/5.0'})).read()
                         zf.writestr(f"{folder_name}/{att.filename}", img_data)
-                    except: pass
+                    except Exception as e:
+                        print(f"附件下载失败: {e}")
 
         excel_memory = io.BytesIO()
         wb.save(excel_memory)
@@ -335,8 +343,6 @@ def download_all():
 
     memory_zip.seek(0)
     return send_file(memory_zip, mimetype='application/zip', as_attachment=True, download_name='南大报销汇总数据_云端导出.zip')
-
-
 
 if __name__ == '__main__':
     # Vercel 不会运行这里，这只是为了让你在本地最后测试一次
