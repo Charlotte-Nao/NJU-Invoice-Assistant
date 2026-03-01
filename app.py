@@ -78,6 +78,14 @@ with app.app_context():
 @app.route('/')
 def index():
     invoices = Invoice.query.order_by(Invoice.id.desc()).all()
+    
+    # ===== 核心修复：每次打开网页时，实时去数据库盘点每张发票的附件 =====
+    for inv in invoices:
+        atts = Attachment.query.filter_by(invoice_id=inv.id).all()
+        inv.has_order = any('订单' in a.filename for a in atts)
+        inv.has_pay = any('支付' in a.filename for a in atts)
+    # ===================================================================
+    
     return render_template('index.html', invoices=invoices)
 
 @app.route('/upload', methods=['POST'])
