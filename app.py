@@ -117,7 +117,17 @@ def upload():
         
         # 组装纯正的原生网络请求
         request_url = f"https://aip.baidubce.com/rest/2.0/ocr/v1/vat_invoice?access_token={access_token}"
-        payload = {'image': base64.b64encode(file_bytes).decode('utf-8')}
+        
+# ================= 核心修改：智能识别图片或 PDF =================
+        if file.filename.lower().endswith('.pdf') or file.content_type == 'application/pdf':
+            # 如果是 PDF，使用百度专属的 pdf_file 参数
+            payload = {'pdf_file': base64.b64encode(file_bytes).decode('utf-8')}
+        else:
+            # 如果是普通图片，保持使用 image 参数
+            payload = {'image': base64.b64encode(file_bytes).decode('utf-8')}
+        # ===============================================================
+
+
         data = urllib.parse.urlencode(payload).encode('utf-8')
         
         req = urllib.request.Request(request_url, data=data)

@@ -194,7 +194,7 @@
                                 <h6 class="mt-3">选择或拖拽发票文件(支持批量上传)</h6>
                                 <p class="small text-muted mb-4">支持 PDF 或常见的图片格式</p>
 
-                                <input class="form-control form-control-lg" type="file" id="invoice" name="invoice" accept="image/jpeg, image/png, image/jpg" required>
+                                <input class="form-control form-control-lg" type="file" id="invoice" name="invoice" accept="image/jpeg, image/png, image/jpg, application/pdf" required>
 
                             </div>
                             <button type="submit" class="btn btn-nju w-100 py-3 mt-4 fw-bold shadow-sm">
@@ -586,7 +586,7 @@
                                     <div class="attachment-drop-zone">
                                         <i class="bi bi-cart-check text-muted"></i>
                                         <p class="small mb-0 text-muted mt-1" id="label-order-${invId}">点击或拖拽上传</p>
-                                        <input type="file" name="files" multiple onchange="updateFileName(this, 'label-order-${invId}')">
+                                        <input type="file" name="files" multiple accept="image/*, application/pdf" onchange="updateFileName(this, 'label-order-${invId}')">
                                     </div>
                                 </div>
                                 <button type="submit" class="btn btn-save btn-sm w-100 py-2">
@@ -602,7 +602,7 @@
                                     <div class="attachment-drop-zone">
                                         <i class="bi bi-credit-card-2-back text-muted"></i>
                                         <p class="small mb-0 text-muted mt-1" id="label-pay-${invId}">点击或拖拽上传</p>
-                                        <input type="file" name="files" multiple onchange="updateFileName(this, 'label-pay-${invId}')">
+                                        <input type="file" name="files" multiple accept="image/*, application/pdf" onchange="updateFileName(this, 'label-pay-${invId}')">
                                     </div>
                                 </div>
                                 <button type="submit" class="btn btn-save btn-sm w-100 py-2">
