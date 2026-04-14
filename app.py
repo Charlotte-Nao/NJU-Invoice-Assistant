@@ -101,7 +101,12 @@ def upload():
     stu_id = request.form.get('stu_id', '')
     bank_card = request.form.get('bank_card', '')
     # ==== 新增：获取前端传来的仓库密钥 ====
-    warehouse_key = request.form.get('warehouse_key', '').strip() or 'main'
+    warehouse_key = request.form.get('warehouse_key', '').strip()
+    
+    # 后端双重校验：如果没有填写仓库密钥，直接拦截并提示
+    if not warehouse_key:
+        flash("仓库密钥不能为空！")
+        return redirect(url_for('index'))
     
     if 'invoice' not in request.files:
         flash("没有检测到文件上传！")
@@ -274,6 +279,29 @@ def delete_attachment(id):
         return {"ok": True}
     return {"ok": False}
 
+@app.route('/delete/<int:id>', methods=['GET'])
+def delete_invoice(id):
+    try:
+        # 1. 查找对应的发票
+        inv = Invoice.query.get_or_404(id)
+        
+        # 2. 删除该发票关联的明细 (InvoiceItem)
+        db.session.query(InvoiceItem).filter_by(invoice_id=id).delete()
+        
+        # 3. 删除该发票关联的附件记录 (Attachment)
+        db.session.query(Attachment).filter_by(invoice_id=id).delete()
+        
+        # 4. 删除发票主记录
+        db.session.delete(inv)
+        db.session.commit()
+        
+        # 5. 给前端 JS 返回成功信号，前端会自动移除对应的卡片
+        return {"ok": True}
+        
+    except Exception as e:
+        db.session.rollback()
+        return {"ok": False, "error": str(e)}
+    
 @app.route('/clear_all', methods=['POST'])
 def clear_all():
     # ==== 获取当前操作的仓库密钥 ====
@@ -307,25 +335,47 @@ def download_all():
 
     memory_zip = io.BytesIO()
     with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # 1. 生成最外层的 Excel 汇总表
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "报销汇总"
         ws.append(['发票垫付人', '学号', '南京大学工行卡卡号', '报销商品名称', '规格型号', '单位', '供应商', '发票号', '发票代码', '数量', '总金额', '单价', '开票日期'])
 
+        # 创建一个集合，用于记录已经写过“垫付人信息.txt”的名字，防止重复创建
+        written_payers = set()
+
         for inv in invoices:
             items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
+            
+            # --- 处理 Excel 写入，并提取商品名称 ---
             if not items:
                 ws.append([inv.payer, inv.stu_id, inv.bank_card, '详见原件', '-', '-', inv.seller, inv.inv_num, inv.inv_code, '-', inv.total_amount, '-', inv.date])
+                goods_name = "未识别商品"
             else:
                 for item in items:
                     ws.append([inv.payer, inv.stu_id, inv.bank_card, item.name, item.spec, item.unit, inv.seller, inv.inv_num, inv.inv_code, item.quantity, item.amount, item.price, inv.date])
+                
+                # 将同一张发票里的多个商品名称用下划线拼接起来作为文件夹名
+                goods_name = "_".join([item.name for item in items if item.name])
+                if not goods_name:
+                    goods_name = "未识别商品"
 
-            safe_date = inv.date.replace('/', '-').replace('\\', '-') if inv.date else '未知日期'
-            folder_name = f"{inv.payer}_{safe_date}_记录{inv.id}"
+            # --- 构建全新的文件夹层级 ---
+            # 第一层：垫付人姓名文件夹
+            payer_folder = f"{inv.payer}"
             
-            txt_content = f"姓名: {inv.payer}\n学号: {inv.stu_id}\n银行卡号: {inv.bank_card}\n"
-            zf.writestr(f"{folder_name}/垫付人信息.txt", txt_content.encode('utf-8'))
+            # 如果是第一次遍历到这个垫付人，就写入他的信息txt
+            if inv.payer not in written_payers:
+                txt_content = f"姓名: {inv.payer}\n学号: {inv.stu_id}\n银行卡号: {inv.bank_card}\n"
+                zf.writestr(f"{payer_folder}/垫付人信息.txt", txt_content.encode('utf-8'))
+                written_payers.add(inv.payer)
             
+            # 第二层：商品名称文件夹（带上记录ID防止同名商品覆盖）
+            # 过滤掉商品名称中可能导致路径错误的特殊字符（如斜杠）
+            safe_goods_name = goods_name.replace('/', '-').replace('\\', '-').replace(':', '')
+            sub_folder = f"{payer_folder}/{safe_goods_name}_记录{inv.id}"
+            
+            # --- 抓取并写入发票原件 ---
             if inv.file_url:
                 try:
                     import urllib.parse
@@ -334,26 +384,28 @@ def download_all():
                     if not ext: ext = '.jpg'
                     
                     img_data = urllib.request.urlopen(urllib.request.Request(inv.file_url, headers={'User-Agent': 'Mozilla/5.0'})).read()
-                    zf.writestr(f"{folder_name}/发票原件{ext}", img_data)
+                    zf.writestr(f"{sub_folder}/发票原件{ext}", img_data)
                 except Exception as e:
                     print(f"原件下载失败: {e}")
                     
+            # --- 抓取并写入附件截图 ---
             atts = Attachment.query.filter_by(invoice_id=inv.id).all()
             for att in atts:
                 if att.file_url:
                     try:
                         img_data = urllib.request.urlopen(urllib.request.Request(att.file_url, headers={'User-Agent': 'Mozilla/5.0'})).read()
-                        zf.writestr(f"{folder_name}/{att.filename}", img_data)
+                        zf.writestr(f"{sub_folder}/{att.filename}", img_data)
                     except Exception as e:
                         print(f"附件下载失败: {e}")
 
+        # 最后将 Excel 存入 ZIP 的根目录
         excel_memory = io.BytesIO()
         wb.save(excel_memory)
         zf.writestr("发票汇总报表.xlsx", excel_memory.getvalue())
 
     memory_zip.seek(0)
-    # ==== 修改导出的文件名，带上当前的仓库密钥 ====
     return send_file(memory_zip, mimetype='application/zip', as_attachment=True, download_name=f'南大报销_{current_key}仓库.zip')
+
 if __name__ == '__main__':
     # Vercel 不会运行这里，这只是为了让你在本地最后测试一次
     app.run(debug=True, port=5000)
