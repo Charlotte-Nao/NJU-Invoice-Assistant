@@ -77,6 +77,24 @@ class Attachment(db.Model):
 # 自动在云端创建数据表
 with app.app_context():
     db.create_all()
+    
+    # ==== 新增：自动数据库迁移补丁 ====
+    # 强制执行 SQL 语句，为云端的旧表打上新加的字段补丁
+    from sqlalchemy import text
+    
+    try:
+        db.session.execute(text('ALTER TABLE invoice ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE;'))
+        db.session.commit()
+        print("✅ 已成功在数据库中修补 is_deleted 列！")
+    except Exception:
+        db.session.rollback() # 如果报错说明列已经存在，忽略即可
+        
+    try:
+        # 顺便确保 warehouse_key 也被正确添加（防止旧表也没有这个列）
+        db.session.execute(text("ALTER TABLE invoice ADD COLUMN warehouse_key VARCHAR(50) DEFAULT 'main';"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 # ==========================================
 # 3. 路由与核心业务逻辑
