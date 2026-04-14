@@ -323,7 +323,15 @@ def clear_all():
 
 @app.route('/download_all')
 def download_all():
-    import io, zipfile, openpyxl, urllib.request, os
+    import io, zipfile, openpyxl, urllib.request, os, re
+
+    # ==== 新增：清洗文件夹名字的“杀毒软件” ====
+    def sanitize_filename(name):
+        if not name: return "未知商品"
+        # 替换Windows不支持的所有特殊字符（包括发票上最常见的星号 * ）
+        safe_name = re.sub(r'[\\/:*?"<>|\r\n]', '_', str(name))
+        # 限制最大长度，防止一张发票商品太多导致路径超长崩溃
+        return safe_name[:40] 
 
     # ==== 获取当前操作的仓库密钥 ====
     current_key = request.args.get('key', 'main')
@@ -335,19 +343,16 @@ def download_all():
 
     memory_zip = io.BytesIO()
     with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # 1. 生成最外层的 Excel 汇总表
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "报销汇总"
         ws.append(['发票垫付人', '学号', '南京大学工行卡卡号', '报销商品名称', '规格型号', '单位', '供应商', '发票号', '发票代码', '数量', '总金额', '单价', '开票日期'])
 
-        # 创建一个集合，用于记录已经写过“垫付人信息.txt”的名字，防止重复创建
         written_payers = set()
 
         for inv in invoices:
             items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
             
-            # --- 处理 Excel 写入，并提取商品名称 ---
             if not items:
                 ws.append([inv.payer, inv.stu_id, inv.bank_card, '详见原件', '-', '-', inv.seller, inv.inv_num, inv.inv_code, '-', inv.total_amount, '-', inv.date])
                 goods_name = "未识别商品"
@@ -355,27 +360,23 @@ def download_all():
                 for item in items:
                     ws.append([inv.payer, inv.stu_id, inv.bank_card, item.name, item.spec, item.unit, inv.seller, inv.inv_num, inv.inv_code, item.quantity, item.amount, item.price, inv.date])
                 
-                # 将同一张发票里的多个商品名称用下划线拼接起来作为文件夹名
                 goods_name = "_".join([item.name for item in items if item.name])
                 if not goods_name:
                     goods_name = "未识别商品"
 
-            # --- 构建全新的文件夹层级 ---
-            # 第一层：垫付人姓名文件夹
-            payer_folder = f"{inv.payer}"
+            # === 核心修复：经过清洗后的安全文件夹名字 ===
+            safe_payer = sanitize_filename(inv.payer)
+            safe_goods = sanitize_filename(goods_name)
             
-            # 如果是第一次遍历到这个垫付人，就写入他的信息txt
-            if inv.payer not in written_payers:
+            payer_folder = f"{safe_payer}"
+            
+            if safe_payer not in written_payers:
                 txt_content = f"姓名: {inv.payer}\n学号: {inv.stu_id}\n银行卡号: {inv.bank_card}\n"
                 zf.writestr(f"{payer_folder}/垫付人信息.txt", txt_content.encode('utf-8'))
-                written_payers.add(inv.payer)
+                written_payers.add(safe_payer)
             
-            # 第二层：商品名称文件夹（带上记录ID防止同名商品覆盖）
-            # 过滤掉商品名称中可能导致路径错误的特殊字符（如斜杠）
-            safe_goods_name = goods_name.replace('/', '-').replace('\\', '-').replace(':', '')
-            sub_folder = f"{payer_folder}/{safe_goods_name}_记录{inv.id}"
+            sub_folder = f"{payer_folder}/{safe_goods}_记录{inv.id}"
             
-            # --- 抓取并写入发票原件 ---
             if inv.file_url:
                 try:
                     import urllib.parse
@@ -388,7 +389,6 @@ def download_all():
                 except Exception as e:
                     print(f"原件下载失败: {e}")
                     
-            # --- 抓取并写入附件截图 ---
             atts = Attachment.query.filter_by(invoice_id=inv.id).all()
             for att in atts:
                 if att.file_url:
@@ -398,7 +398,6 @@ def download_all():
                     except Exception as e:
                         print(f"附件下载失败: {e}")
 
-        # 最后将 Excel 存入 ZIP 的根目录
         excel_memory = io.BytesIO()
         wb.save(excel_memory)
         zf.writestr("发票汇总报表.xlsx", excel_memory.getvalue())
