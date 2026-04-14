@@ -325,15 +325,12 @@ def clear_all():
 def download_all():
     import io, zipfile, openpyxl, urllib.request, os, re
 
-    # ==== 新增：清洗文件夹名字的“杀毒软件” ====
+    # 清洗文件夹和文件名，确保兼容 Windows
     def sanitize_filename(name):
-        if not name: return "未知商品"
-        # 替换Windows不支持的所有特殊字符（包括发票上最常见的星号 * ）
+        if not name: return "未知"
         safe_name = re.sub(r'[\\/:*?"<>|\r\n]', '_', str(name))
-        # 限制最大长度，防止一张发票商品太多导致路径超长崩溃
-        return safe_name[:40] 
+        return safe_name[:40].strip()
 
-    # ==== 获取当前操作的仓库密钥 ====
     current_key = request.args.get('key', 'main')
     invoices = Invoice.query.filter_by(warehouse_key=current_key).all()
     
@@ -349,41 +346,51 @@ def download_all():
         ws.append(['发票垫付人', '学号', '南京大学工行卡卡号', '报销商品名称', '规格型号', '单位', '供应商', '发票号', '发票代码', '数量', '总金额', '单价', '开票日期'])
 
         written_payers = set()
+        # 用于记录每个垫付人下已经使用的子文件夹名，防止同名商品冲突
+        payer_subfolder_counters = {} 
 
         for inv in invoices:
             items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
             
+            # 1. 整理商品名称
             if not items:
                 ws.append([inv.payer, inv.stu_id, inv.bank_card, '详见原件', '-', '-', inv.seller, inv.inv_num, inv.inv_code, '-', inv.total_amount, '-', inv.date])
                 goods_name = "未识别商品"
             else:
                 for item in items:
                     ws.append([inv.payer, inv.stu_id, inv.bank_card, item.name, item.spec, item.unit, inv.seller, inv.inv_num, inv.inv_code, item.quantity, item.amount, item.price, inv.date])
-                
                 goods_name = "_".join([item.name for item in items if item.name])
-                if not goods_name:
-                    goods_name = "未识别商品"
+                if not goods_name: goods_name = "未识别商品"
 
-            # === 核心修复：经过清洗后的安全文件夹名字 ===
+            # 2. 处理层级路径
             safe_payer = sanitize_filename(inv.payer)
             safe_goods = sanitize_filename(goods_name)
-            
             payer_folder = f"{safe_payer}"
             
+            # --- 修改点1：垫付人信息文件名改为 姓名.txt ---
             if safe_payer not in written_payers:
                 txt_content = f"姓名: {inv.payer}\n学号: {inv.stu_id}\n银行卡号: {inv.bank_card}\n"
-                zf.writestr(f"{payer_folder}/垫付人信息.txt", txt_content.encode('utf-8'))
+                zf.writestr(f"{payer_folder}/{safe_payer}.txt", txt_content.encode('utf-8'))
                 written_payers.add(safe_payer)
+                payer_subfolder_counters[safe_payer] = {}
+
+            # --- 修改点2：去掉“_记录ID”，并处理重名冲突 ---
+            # 如果同一个人的多张发票商品名完全一样，加个数字后缀区分，而不是数据库ID
+            if safe_goods not in payer_subfolder_counters[safe_payer]:
+                payer_subfolder_counters[safe_payer][safe_goods] = 0
+                folder_suffix = ""
+            else:
+                payer_subfolder_counters[safe_payer][safe_goods] += 1
+                folder_suffix = f"_{payer_subfolder_counters[safe_payer][safe_goods]}"
+
+            sub_folder = f"{payer_folder}/{safe_goods}{folder_suffix}"
             
-            sub_folder = f"{payer_folder}/{safe_goods}_记录{inv.id}"
-            
+            # 3. 写入文件
             if inv.file_url:
                 try:
                     import urllib.parse
                     raw_url_name = urllib.parse.unquote(inv.file_url.split('/')[-1])
-                    ext = os.path.splitext(raw_url_name)[1]
-                    if not ext: ext = '.jpg'
-                    
+                    ext = os.path.splitext(raw_url_name)[1] or '.jpg'
                     img_data = urllib.request.urlopen(urllib.request.Request(inv.file_url, headers={'User-Agent': 'Mozilla/5.0'})).read()
                     zf.writestr(f"{sub_folder}/发票原件{ext}", img_data)
                 except Exception as e:
@@ -398,6 +405,7 @@ def download_all():
                     except Exception as e:
                         print(f"附件下载失败: {e}")
 
+        # 写入汇总表
         excel_memory = io.BytesIO()
         wb.save(excel_memory)
         zf.writestr("发票汇总报表.xlsx", excel_memory.getvalue())
