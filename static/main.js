@@ -657,3 +657,18 @@ document.querySelectorAll('.load-detail-btn').forEach(btn => {
         }
     });
 });
+// ==========================================
+// 导出全量记录的密码弹窗逻辑
+// ==========================================
+function requirePasswordForMaster() {
+    // 弹出浏览器原生的输入框
+    const pwd = prompt(" 安全校验\n请输入管理员密码以导出全量数据留档：");
+    
+    // 如果用户输入了密码（没有点击取消）
+    if (pwd !== null) {
+        // 把密码填入隐藏的表单中
+        document.getElementById('masterPasswordInput').value = pwd;
+        // 提交表单触发下载
+        document.getElementById('masterDownloadForm').submit();
+    }
+}

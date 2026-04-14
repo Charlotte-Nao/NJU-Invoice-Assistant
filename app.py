@@ -413,6 +413,51 @@ def download_all():
     memory_zip.seek(0)
     return send_file(memory_zip, mimetype='application/zip', as_attachment=True, download_name=f'南大报销_{current_key}仓库.zip')
 
+@app.route('/download_master_excel', methods=['POST'])
+def download_master_excel():
+    # ==== 新增：核心密码校验逻辑 ====
+    password = request.form.get('password', '')
+    current_key = request.form.get('key', 'main') # 获取当前所在仓库，方便输错密码后跳回
+    
+    if password != '111':
+        # 如果密码错误，弹窗提示（红色danger样式）并拒绝下载
+        flash("密码错误，拒绝访问全量数据！", "danger")
+        return redirect(url_for('index', key=current_key))
+
+    import io, openpyxl
+    from flask import send_file
+
+    all_invoices = Invoice.query.order_by(Invoice.id.desc()).all()
+    
+    if not all_invoices:
+        flash("全量仓库中没有任何记录！")
+        return redirect(url_for('index', key=current_key))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "全量留档总记录"
+    
+    headers = ['所属仓库', '发票垫付人', '学号', '南京大学工行卡卡号', '报销商品名称', '规格型号', '单位', '供应商', '发票号', '发票代码', '数量', '总金额', '单价', '开票日期']
+    ws.append(headers)
+
+    for inv in all_invoices:
+        items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
+        if not items:
+            ws.append([inv.warehouse_key, inv.payer, inv.stu_id, inv.bank_card, '详见原件', '-', '-', inv.seller, inv.inv_num, inv.inv_code, '-', inv.total_amount, '-', inv.date])
+        else:
+            for item in items:
+                ws.append([inv.warehouse_key, inv.payer, inv.stu_id, inv.bank_card, item.name, item.spec, item.unit, inv.seller, inv.inv_num, inv.inv_code, item.quantity, item.amount, item.price, inv.date])
+
+    excel_memory = io.BytesIO()
+    wb.save(excel_memory)
+    excel_memory.seek(0)
+    
+    return send_file(
+        excel_memory, 
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
+        as_attachment=True, 
+        download_name='南大报销助手_全量留档总记录.xlsx'
+    )
 if __name__ == '__main__':
     # Vercel 不会运行这里，这只是为了让你在本地最后测试一次
     app.run(debug=True, port=5000)
