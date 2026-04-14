@@ -47,6 +47,8 @@ class Invoice(db.Model):
     total_amount = db.Column(db.String(50))
 
     warehouse_key = db.Column(db.String(50), default='main') # 新增：仓库密钥
+
+    is_deleted = db.Column(db.Boolean, default=False)
     
     file_url = db.Column(db.String(500))  # 存放云端图片的公网 URL
     items = db.relationship('InvoiceItem', backref='invoice', lazy=True, cascade="all, delete-orphan")
@@ -86,7 +88,7 @@ def index():
     current_key = request.args.get('key', 'main').strip() or 'main'
     
     # 核心：只查当前密钥下的发票
-    invoices = Invoice.query.filter_by(warehouse_key=current_key).order_by(Invoice.id.desc()).all()
+    invoices = Invoice.query.filter_by(warehouse_key=current_key, is_deleted=False).order_by(Invoice.id.desc()).all()   
     
     for inv in invoices:
         atts = Attachment.query.filter_by(invoice_id=inv.id).all()
@@ -282,22 +284,13 @@ def delete_attachment(id):
 @app.route('/delete/<int:id>', methods=['GET'])
 def delete_invoice(id):
     try:
-        # 1. 查找对应的发票
         inv = Invoice.query.get_or_404(id)
         
-        # 2. 删除该发票关联的明细 (InvoiceItem)
-        db.session.query(InvoiceItem).filter_by(invoice_id=id).delete()
-        
-        # 3. 删除该发票关联的附件记录 (Attachment)
-        db.session.query(Attachment).filter_by(invoice_id=id).delete()
-        
-        # 4. 删除发票主记录
-        db.session.delete(inv)
+        # ==== 修改：不再直接删除，而是打上标记 ====
+        inv.is_deleted = True 
         db.session.commit()
         
-        # 5. 给前端 JS 返回成功信号，前端会自动移除对应的卡片
         return {"ok": True}
-        
     except Exception as e:
         db.session.rollback()
         return {"ok": False, "error": str(e)}
@@ -307,14 +300,14 @@ def clear_all():
     # ==== 获取当前操作的仓库密钥 ====
     current_key = request.form.get('key', 'main')
     try:
-        # 只找出当前仓库的发票并删除
-        invs = Invoice.query.filter_by(warehouse_key=current_key).all()
+        # 只找出当前仓库【尚未删除】的发票
+        invs = Invoice.query.filter_by(warehouse_key=current_key, is_deleted=False).all()
         if invs:
-            inv_ids = [inv.id for inv in invs]
-            db.session.query(InvoiceItem).filter(InvoiceItem.invoice_id.in_(inv_ids)).delete(synchronize_session=False)
-            db.session.query(Attachment).filter(Attachment.invoice_id.in_(inv_ids)).delete(synchronize_session=False)
-            db.session.query(Invoice).filter(Invoice.id.in_(inv_ids)).delete(synchronize_session=False)
+            # ==== 核心修改：将物理删除改为软删除 ====
+            for inv in invs:
+                inv.is_deleted = True
             db.session.commit()
+            
         flash(f"🎉 仓库【{current_key}】的所有记录已成功清空！")
     except Exception as e:
         db.session.rollback()
@@ -332,7 +325,7 @@ def download_all():
         return safe_name[:40].strip()
 
     current_key = request.args.get('key', 'main')
-    invoices = Invoice.query.filter_by(warehouse_key=current_key).all()
+    invoices = Invoice.query.filter_by(warehouse_key=current_key, is_deleted=False).all()
     
     if not invoices:
         flash(f"仓库【{current_key}】没有可导出的数据！")
